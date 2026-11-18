@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <!-- iPhoneでのピンチズーム抑制・セーフエリア対応 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <!-- ホーム画面に追加した際にアプリ風にする設定 -->
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <title>写真カラーピッカー（RGB & 彩度）</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts: Inter & Noto Sans JP -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@500;600;700;800&family=Noto+Sans+JP:wght@500;700;800&display=swap" rel="stylesheet">
+
+    <style>
+        body {
+            font-family: 'Inter', 'Noto Sans JP', sans-serif;
+            background-color: #0f172a; /* ダークスレート背景（色の視認性を高めるため） */
+            color: #f8fafc;
+            min-height: 100dvh;
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom);
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        /* キャンバス上のタッチ操作で画面がスクロールしないように制御 */
+        #imageCanvas {
+            touch-action: none;
+            cursor: crosshair;
+        }
+
+        /* 拡大ルーペのスタイル */
+        #loupe {
+            pointer-events: none;
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.7), 0 0 0 3px #ffffff, 0 0 0 5px rgba(0, 0, 0, 0.4);
+            transition: opacity 0.12s ease-out, transform 0.08s ease-out;
+        }
+
+        /* 透明チェック柄（カラープレビュー用背景） */
+        .checkerboard {
+            background-image: linear-gradient(45deg, #cbd5e1 25%, transparent 25%),
+                              linear-gradient(-45deg, #cbd5e1 25%, transparent 25%),
+                              linear-gradient(45deg, transparent 75%, #cbd5e1 75%),
+                              linear-gradient(-45deg, transparent 75%, #cbd5e1 75%);
+            background-size: 12px 12px;
+            background-position: 0 0, 0 6px, 6px -6px, -6px 0px;
+        }
+    </style>
+</head>
+<body class="flex flex-col justify-between overflow-x-hidden">
+
+    <!-- ヘッダー -->
+    <header class="w-full max-w-lg mx-auto px-4 pt-3 pb-2 flex items-center justify-between">
+        <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 rounded-xl bg-gradient-to-tr from-pink-500 via-amber-400 to-cyan-400 flex items-center justify-center shadow-lg">
+                <svg class="w-5 h-5 text-white drop-shadow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" />
+                </svg>
+            </div>
+            <div>
+                <h1 class="text-base sm:text-lg font-extrabold tracking-tight text-white">カラー＆彩度ピッカー</h1>
+                <p class="text-[11px] text-slate-400">写真をタップ・なぞって色を測定</p>
+            </div>
+        </div>
+
+        <!-- 写真選択ボタン（右上） -->
+        <label for="photoInput" class="bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition text-white text-xs sm:text-sm font-bold px-3.5 py-2 rounded-xl shadow-md cursor-pointer flex items-center gap-1.5">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+            </svg>
+            <span>写真を選ぶ</span>
+        </label>
+        <!-- iPhoneの写真ライブラリ・カメラ両対応のinput -->
+        <input type="file" id="photoInput" accept="image/*" class="hidden">
+    </header>
+
+    <!-- メイン：写真表示＆タップ領域 -->
+    <main class="w-full max-w-lg mx-auto px-4 my-auto flex-1 flex flex-col justify-center">
+        <div id="canvasWrapper" class="relative w-full bg-slate-800/80 border-2 border-dashed border-slate-600 rounded-3xl overflow-hidden flex items-center justify-center min-h-[300px] max-h-[52dvh] shadow-2xl">
+            
+            <!-- 初期状態のアップロード案内 -->
+            <div id="emptyState" class="text-center p-6 flex flex-col items-center">
+                <div class="w-16 h-16 rounded-2xl bg-slate-700/70 flex items-center justify-center mb-3 text-slate-300">
+                    <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                </div>
+                <p class="text-sm font-bold text-slate-200 mb-1">iPhoneの写真を読み込みます</p>
+                <p class="text-xs text-slate-400 mb-4">カメラロールから選択するか、その場で撮影できます</p>
+                <div class="flex flex-wrap justify-center gap-2">
+                    <label for="photoInput" class="bg-indigo-600 hover:bg-indigo-500 active:scale-95 transition text-white text-xs font-bold px-4 py-2.5 rounded-xl shadow cursor-pointer">
+                        ライブラリ / カメラを開く
+                    </label>
+                    <button id="sampleBtn" class="bg-slate-700 hover:bg-slate-600 active:scale-95 transition text-slate-200 text-xs font-bold px-3.5 py-2.5 rounded-xl">
+                        サンプル画像で試す
+                    </button>
+                </div>
+            </div>
+
+            <!-- 画像描画用キャンバス -->
+            <canvas id="imageCanvas" class="hidden max-w-full max-h-[52dvh] object-contain"></canvas>
+
+            <!-- タップ位置と平均化範囲（半径10px）を示すターゲットマーカー -->
+            <div id="targetMarker" class="hidden pointer-events-none absolute rounded-full border-2 border-white bg-white/10 shadow-[0_0_0_2px_rgba(0,0,0,0.6),inset_0_0_6px_rgba(0,0,0,0.4)] flex items-center justify-center">
+                <div class="w-1 h-1 rounded-full bg-white shadow"></div>
+            </div>
+
+            <!-- 指でなぞっている時に表示される拡大ルーペ -->
+            <div id="loupe" class="hidden absolute w-24 h-24 rounded-full overflow-hidden bg-slate-900 z-20">
+                <canvas id="loupeCanvas" width="96" height="96" class="w-full h-full"></canvas>
+                <!-- ルーペ内のサンプリング円範囲ガイド -->
+                <div class="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div class="w-[64px] h-[64px] rounded-full border border-dashed border-white/85 shadow-[0_0_2px_rgba(0,0,0,0.8)] flex items-center justify-center">
+                        <div class="w-1.5 h-1.5 rounded-full bg-white/90"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- フッター：測定結果パネル（RGB値・彩度・HEX） -->
+    <section class="w-full max-w-lg mx-auto px-4 pt-3 pb-4">
+        <div class="bg-slate-800/95 backdrop-blur-md border border-slate-700/80 rounded-3xl p-4 shadow-2xl">
+            
+            <!-- 上段：選択中の色プレビュー＆HEXコードコピー -->
+            <div class="flex items-center justify-between mb-3.5 pb-3 border-b border-slate-700/80">
+                <div class="flex items-center gap-3">
+                    <div class="w-12 h-12 rounded-2xl checkerboard overflow-hidden border-2 border-white/80 shadow-inner shrink-0">
+                        <div id="colorPreview" class="w-full h-full transition-colors duration-75" style="background-color: #3b82f6;"></div>
+                    </div>
+                    <div>
+                        <div class="flex items-center gap-2">
+                            <span id="hexDisplay" class="text-lg font-extrabold tracking-wider text-white font-mono">#3B82F6</span>
+                            <span id="coordDisplay" class="text-[11px] text-slate-400 font-mono bg-slate-900/80 px-2 py-0.5 rounded-md">X: - , Y: - (R:10px平均)</span>
+                        </div>
+                        <p id="colorNameHint" class="text-xs text-slate-400 mt-0.5">タップ中心から半径10pxの平均色を測定</p>
+                    </div>
+                </div>
+
+                <!-- コピーボタン -->
+                <button id="copyBtn" class="bg-slate-700 hover:bg-slate-600 active:scale-95 transition text-white text-xs font-bold px-3 py-2 rounded-xl flex items-center gap-1 shrink-0">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                    <span id="copyBtnText">コピー</span>
+                </button>
+            </div>
+
+            <!-- 中段：RGB値（R・G・B それぞれの数値とバー） -->
+            <div class="grid grid-cols-3 gap-2.5 mb-3.5">
+                <!-- R (Red) -->
+                <div class="bg-slate-900/90 rounded-2xl p-2.5 border border-slate-700/60">
+                    <div class="flex items-center justify-between text-xs font-bold mb-1">
+                        <span class="text-rose-400">R (赤)</span>
+                        <span id="rValue" class="text-base font-extrabold text-white font-mono">59</span>
+                    </div>
+                    <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                        <div id="rBar" class="h-full bg-rose-500 transition-all duration-75" style="width: 23%"></div>
+                    </div>
+                </div>
+
+                <!-- G (Green) -->
+                <div class="bg-slate-900/90 rounded-2xl p-2.5 border border-slate-700/60">
+                    <div class="flex items-center justify-between text-xs font-bold mb-1">
+                        <span class="text-emerald-400">G (緑)</span>
+                        <span id="gValue" class="text-base font-extrabold text-white font-mono">130</span>
+                    </div>
+                    <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                        <div id="gBar" class="h-full bg-emerald-500 transition-all duration-75" style="width: 51%"></div>
+                    </div>
+                </div>
+
+                <!-- B (Blue) -->
+                <div class="bg-slate-900/90 rounded-2xl p-2.5 border border-slate-700/60">
+                    <div class="flex items-center justify-between text-xs font-bold mb-1">
+                        <span class="text-sky-400">B (青)</span>
+                        <span id="bValue" class="text-base font-extrabold text-white font-mono">246</span>
+                    </div>
+                    <div class="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                        <div id="bBar" class="h-full bg-sky-500 transition-all duration-75" style="width: 96%"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 下段：彩度（Saturation）表示エリア -->
+            <div class="bg-slate-900/90 rounded-2xl p-3 border border-slate-700/60">
+                <div class="flex items-center justify-between mb-1.5">
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs font-extrabold text-amber-300">彩度 (Saturation)</span>
+                        <!-- HSV / HSL 切替バッジ -->
+                        <button id="satModeBtn" class="text-[10px] font-bold bg-slate-800 hover:bg-slate-700 text-slate-300 px-2 py-0.5 rounded-md border border-slate-600 transition">
+                            HSV基準 ⇄
+                        </button>
+                    </div>
+                    <div class="flex items-baseline gap-1">
+                        <span id="satValue" class="text-xl font-black text-amber-400 font-mono">76</span>
+                        <span class="text-xs font-bold text-slate-400">%</span>
+                        <span id="satSubValue" class="text-[11px] text-slate-400 font-mono ml-1">(HSL: 91%)</span>
+                    </div>
+                </div>
+                <!-- 彩度ゲージ -->
+                <div class="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden relative">
+                    <div id="satBar" class="h-full rounded-full transition-all duration-75 bg-gradient-to-r from-slate-400 via-amber-400 to-pink-500" style="width: 76%"></div>
+                </div>
+                <div class="flex justify-between text-[10px] text-slate-500 mt-1 font-medium">
+                    <span>0% (無彩色・モノクロ)</span>
+                    <span>100% (最も鮮やか)</span>
+                </div>
+            </div>
+
+        </div>
+    </section>
+
+    <!-- トースト通知（コピー完了時など） -->
+    <div id="toast" class="fixed top-16 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-xs font-bold px-4 py-2 rounded-full shadow-xl opacity-0 pointer-events-none transition-opacity duration-200 z-50">
+        色情報をクリップボードにコピーしました！
+    </div>
+
+    <script>
+        /**
+         * 写真カラーピッカー（RGB値＆彩度測定）メインスクリプト
+         * iPhoneのHEIC/JPEG/PNG写真読み込み、高解像度キャンバス描画、指先拡大ルーペに対応
+         */
+
+        // --- DOM要素 ---
+        const photoInput = document.getElementById('photoInput');
+        const sampleBtn = document.getElementById('sampleBtn');
+        const canvasWrapper = document.getElementById('canvasWrapper');
+        const emptyState = document.getElementById('emptyState');
+        const imageCanvas = document.getElementById('imageCanvas');
+        const ctx = imageCanvas.getContext('2d', { willReadFrequently: true });
+
+        const targetMarker = document.getElementById('targetMarker');
+        const loupe = document.getElementById('loupe');
+        const loupeCanvas = document.getElementById('loupeCanvas');
+        const loupeCtx = loupeCanvas.getContext('2d');
+
+        // 数値表示用DOM
+        const colorPreview = document.getElementById('colorPreview');
+        const hexDisplay = document.getElementById('hexDisplay');
+        const coordDisplay = document.getElementById('coordDisplay');
+        const colorNameHint = document.getElementById('colorNameHint');
+
+        const rValue = document.getElementById('rValue');
+        const gValue = document.getElementById('gValue');
+        const bValue = document.getElementById('bValue');
+        const rBar = document.getElementById('rBar');
+        const gBar = document.getElementById('gBar');
+        const bBar = document.getElementById('bBar');
+
+        const satModeBtn = document.getElementById('satModeBtn');
+        const satValue = document.getElementById('satValue');
+        const satSubValue = document.getElementById('satSubValue');
+        const satBar = document.getElementById('satBar');
+
+        const copyBtn = document.getElementById('copyBtn');
+        const copyBtnText = document.getElementById('copyBtnText');
+        const toast = document.getElementById('toast');
+
+        // --- 状態変数 ---
+        const SAMPLE_RADIUS = 10; // 平均化する半径（ピクセル）
+        let hasImage = false;
+        let isDragging = false;
+        let satMode = 'HSV'; // 'HSV' (純色度) または 'HSL'
+        let currentColorData = { r: 59, g: 130, b: 246, hex: '#3B82F6', hsvSat: 76, hslSat: 91 };
+
+        // --- 写真ファイルの読み込み処理 ---
+        photoInput.addEventListener('change', (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    loadImageToCanvas(img);
+                };
+                img.onerror = () => {
+                    showToast('画像の読み込みに失敗しました。別の写真をお試しください。', true);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        // --- サンプル画像の生成（すぐに試せる機能） ---
+        sampleBtn.addEventListener('click', () => {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = 600;
+            tempCanvas.height = 450;
+            const tCtx = tempCanvas.getContext('2d');
+
+            // カラフルなグラデーション＋図形を描画
+            const gradH = tCtx.createLinearGradient(0, 0, 600, 0);
+            gradH.addColorStop(0, '#ff0040');
+            gradH.addColorStop(0.2, '#ffae00');
+            gradH.addColorStop(0.4, '#38b000');
+            gradH.addColorStop(0.6, '#00b4d8');
+            gradH.addColorStop(0.8, '#4361ee');
+            gradH.addColorStop(1, '#b5179e');
+            tCtx.fillStyle = gradH;
+            tCtx.fillRect(0, 0, 600, 450);
+
+            // 上から白〜透明〜黒の彩度・明度グラデーションを重ねる
+            const gradV = tCtx.createLinearGradient(0, 0, 0, 450);
+            gradV.addColorStop(0, 'rgba(255,255,255,0.95)');
+            gradV.addColorStop(0.5, 'rgba(255,255,255,0)');
+            gradV.addColorStop(1, 'rgba(0,0,0,0.9)');
+            tCtx.fillStyle = gradV;
+            tCtx.fillRect(0, 0, 600, 450);
+
+            // アクセントの円
+            tCtx.fillStyle = '#ffffff';
+            tCtx.beginPath();
+            tCtx.arc(150, 225, 45, 0, Math.PI * 2);
+            tCtx.fill();
+
+            tCtx.fillStyle = '#ffbe0b';
+            tCtx.beginPath();
+            tCtx.arc(300, 225, 45, 0, Math.PI * 2);
+            tCtx.fill();
+
+            tCtx.fillStyle = '#ff006e';
+            tCtx.beginPath();
+            tCtx.arc(450, 225, 45, 0, Math.PI * 2);
+            tCtx.fill();
+
+            const img = new Image();
+            img.onload = () => loadImageToCanvas(img);
+            img.src = tempCanvas.toDataURL();
+        });
+
+        // --- 画像をキャンバスに描画 ---
+        function loadImageToCanvas(img) {
+            // メモリ負荷を抑えつつ高精細に保つため最大幅を1600pxに制限
+            const MAX_SIZE = 1600;
+            let width = img.naturalWidth || img.width;
+            let height = img.naturalHeight || img.height;
+
+            if (width > MAX_SIZE || height > MAX_SIZE) {
+                if (width > height) {
+                    height = Math.round((height * MAX_SIZE) / width);
+                    width = MAX_SIZE;
+                } else {
+                    width = Math.round((width * MAX_SIZE) / height);
+                    height = MAX_SIZE;
+                }
+            }
+
+            imageCanvas.width = width;
+            imageCanvas.height = height;
+            ctx.clearRect(0, 0, width, height);
+            ctx.drawImage(img, 0, 0, width, height);
+
+            // UI表示の切り替え
+            emptyState.classList.add('hidden');
+            imageCanvas.classList.remove('hidden');
+            canvasWrapper.classList.remove('border-dashed', 'border-slate-600');
+            canvasWrapper.classList.add('border-solid', 'border-slate-700');
+
+            hasImage = true;
+
+            // キャンバス表示後、初期状態として画像中央の色を自動測定
+            requestAnimationFrame(() => {
+                const rect = imageCanvas.getBoundingClientRect();
+                if (rect.width > 0 && rect.height > 0) {
+                    pickColorAtClientPoint(rect.left + rect.width / 2, rect.top + rect.height / 2, false);
+                }
+            });
+        }
+
+        // --- タッチ＆マウス操作のイベントリスナー ---
+        function handlePointerDown(e) {
+            if (!hasImage) return;
+            e.preventDefault();
+            isDragging = true;
+            const point = e.touches ? e.touches[0] : e;
+            pickColorAtClientPoint(point.clientX, point.clientY, true);
+        }
+
+        function handlePointerMove(e) {
+            if (!hasImage || !isDragging) return;
+            e.preventDefault();
+            const point = e.touches ? e.touches[0] : e;
+            pickColorAtClientPoint(point.clientX, point.clientY, true);
+        }
+
+        function handlePointerUp() {
+            if (!isDragging) return;
+            isDragging = false;
+            loupe.classList.add('hidden');
+        }
+
+        imageCanvas.addEventListener('mousedown', handlePointerDown);
+        window.addEventListener('mousemove', handlePointerMove);
+        window.addEventListener('mouseup', handlePointerUp);
+
+        imageCanvas.addEventListener('touchstart', handlePointerDown, { passive: false });
+        window.addEventListener('touchmove', handlePointerMove, { passive: false });
+        window.addEventListener('touchend', handlePointerUp);
+        window.addEventListener('touchcancel', handlePointerUp);
+
+        // --- 指定された画面座標から半径10px以内の平均色を抽出 ---
+        function pickColorAtClientPoint(clientX, clientY, showLoupe) {
+            const canvasRect = imageCanvas.getBoundingClientRect();
+            const wrapperRect = canvasWrapper.getBoundingClientRect();
+
+            // キャンバス内の相対位置（0.0 〜 1.0）を計算し、範囲内にクランプ
+            let relX = (clientX - canvasRect.left) / canvasRect.width;
+            let relY = (clientY - canvasRect.top) / canvasRect.height;
+            relX = Math.max(0, Math.min(0.9999, relX));
+            relY = Math.max(0, Math.min(0.9999, relY));
+
+            // 実際のキャンバスピクセル座標に変換
+            const pixelX = Math.floor(relX * imageCanvas.width);
+            const pixelY = Math.floor(relY * imageCanvas.height);
+
+            // 半径10pxの円形範囲内の全ピクセルの平均RGB値を計算
+            const startX = Math.max(0, pixelX - SAMPLE_RADIUS);
+            const startY = Math.max(0, pixelY - SAMPLE_RADIUS);
+            const endX = Math.min(imageCanvas.width - 1, pixelX + SAMPLE_RADIUS);
+            const endY = Math.min(imageCanvas.height - 1, pixelY + SAMPLE_RADIUS);
+
+            const boxWidth = endX - startX + 1;
+            const boxHeight = endY - startY + 1;
+            const imgData = ctx.getImageData(startX, startY, boxWidth, boxHeight).data;
+
+            let sumR = 0;
+            let sumG = 0;
+            let sumB = 0;
+            let pixelCount = 0;
+            const radiusSq = SAMPLE_RADIUS * SAMPLE_RADIUS;
+
+            for (let y = 0; y < boxHeight; y++) {
+                const dy = (startY + y) - pixelY;
+                const dySq = dy * dy;
+                for (let x = 0; x < boxWidth; x++) {
+                    const dx = (startX + x) - pixelX;
+                    // 円の内部（dx^2 + dy^2 <= r^2）のみを集計
+                    if (dx * dx + dySq <= radiusSq) {
+                        const idx = (y * boxWidth + x) * 4;
+                        sumR += imgData[idx];
+                        sumG += imgData[idx + 1];
+                        sumB += imgData[idx + 2];
+                        pixelCount++;
+                    }
+                }
+            }
+
+            const r = pixelCount > 0 ? Math.round(sumR / pixelCount) : 0;
+            const g = pixelCount > 0 ? Math.round(sumG / pixelCount) : 0;
+            const b = pixelCount > 0 ? Math.round(sumB / pixelCount) : 0;
+
+            // ターゲットマーカー（半径10pxの円）の画面上のサイズと位置を更新
+            const markerX = (canvasRect.left - wrapperRect.left) + (relX * canvasRect.width);
+            const markerY = (canvasRect.top - wrapperRect.top) + (relY * canvasRect.height);
+            const scale = canvasRect.width / imageCanvas.width;
+            const displayDiameter = Math.max(12, SAMPLE_RADIUS * 2 * scale);
+
+            targetMarker.style.width = `${displayDiameter}px`;
+            targetMarker.style.height = `${displayDiameter}px`;
+            targetMarker.style.marginLeft = `${-displayDiameter / 2}px`;
+            targetMarker.style.marginTop = `${-displayDiameter / 2}px`;
+            targetMarker.style.left = `${markerX}px`;
+            targetMarker.style.top = `${markerY}px`;
+            targetMarker.classList.remove('hidden');
+
+            // 指で押さえている時は拡大ルーペを表示・更新
+            if (showLoupe) {
+                updateLoupe(pixelX, pixelY, markerX, markerY, wrapperRect);
+            }
+
+            // 数値計算とUI更新
+            updateColorMetrics(r, g, b, pixelX, pixelY, pixelCount);
+        }
+
+        // --- 拡大ルーペの描画 ---
+        function updateLoupe(pixelX, pixelY, markerX, markerY, wrapperRect) {
+            loupe.classList.remove('hidden');
+
+            // 指で隠れないようにターゲットの少し上に配置（上端に近い場合は下に配置）
+            const offset = 74;
+            let loupeX = markerX - 48; // 幅96pxの半分
+            let loupeY = markerY - offset - 48;
+
+            if (loupeY < 8) {
+                loupeY = markerY + offset - 48;
+            }
+            // 左右のはみ出し防止
+            loupeX = Math.max(8, Math.min(wrapperRect.width - 104, loupeX));
+
+            loupe.style.left = `${loupeX}px`;
+            loupe.style.top = `${loupeY}px`;
+
+            // 半径10px（直径20px）周辺がルーペ内のガイド円（直径64px）に収まるように3.2倍拡大描画
+            loupeCtx.imageSmoothingEnabled = false;
+            loupeCtx.clearRect(0, 0, 96, 96);
+            loupeCtx.fillStyle = '#0f172a';
+            loupeCtx.fillRect(0, 0, 96, 96);
+
+            const viewRadius = 15;
+            loupeCtx.drawImage(
+                imageCanvas,
+                pixelX - viewRadius,
+                pixelY - viewRadius,
+                viewRadius * 2,
+                viewRadius * 2,
+                0,
+                0,
+                96,
+                96
+            );
+        }
+
+        // --- RGBからHEXと彩度（HSV / HSL）を計算してUIに反映 ---
+        function updateColorMetrics(r, g, b, x, y, pixelCount) {
+            // 1. HEXコード変換
+            const toHex = (n) => n.toString(16).padStart(2, '0').toUpperCase();
+            const hex = `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+
+            // 2. 彩度（Saturation）計算
+            const rNorm = r / 255;
+            const gNorm = g / 255;
+            const bNorm = b / 255;
+
+            const max = Math.max(rNorm, gNorm, bNorm);
+            const min = Math.min(rNorm, gNorm, bNorm);
+            const delta = max - min;
+
+            // HSV（HSB）モデルでの彩度: (max - min) / max
+            const hsvSat = max === 0 ? 0 : Math.round((delta / max) * 100);
+
+            // HSLモデルでの彩度: delta / (1 - |2L - 1|)
+            const lightness = (max + min) / 2;
+            const hslSat = delta === 0 ? 0 : Math.round((delta / (1 - Math.abs(2 * lightness - 1))) * 100);
+
+            currentColorData = { r, g, b, hex, hsvSat, hslSat };
+
+            // UI更新
+            colorPreview.style.backgroundColor = `rgb(${r}, ${g}, ${b})`;
+            hexDisplay.textContent = hex;
+            coordDisplay.textContent = `X:${x} Y:${y} (R:${SAMPLE_RADIUS}px)`;
+            colorNameHint.textContent = `rgb(${r}, ${g}, ${b}) ・ ${pixelCount.toLocaleString()}pxの平均`;
+
+            // RGB数値＆プログレスバー更新
+            rValue.textContent = r;
+            gValue.textContent = g;
+            bValue.textContent = b;
+
+            rBar.style.width = `${(r / 255) * 100}%`;
+            gBar.style.width = `${(g / 255) * 100}%`;
+            bBar.style.width = `${(b / 255) * 100}%`;
+
+            // 彩度表示更新
+            renderSaturationUI();
+        }
+
+        function renderSaturationUI() {
+            const { hsvSat, hslSat } = currentColorData;
+            if (satMode === 'HSV') {
+                satValue.textContent = hsvSat;
+                satSubValue.textContent = `(HSL: ${hslSat}%)`;
+                satBar.style.width = `${hsvSat}%`;
+            } else {
+                satValue.textContent = hslSat;
+                satSubValue.textContent = `(HSV: ${hsvSat}%)`;
+                satBar.style.width = `${hslSat}%`;
+            }
+        }
+
+        // --- 彩度計算基準の切替ボタン (HSV ⇄ HSL) ---
+        satModeBtn.addEventListener('click', () => {
+            satMode = satMode === 'HSV' ? 'HSL' : 'HSV';
+            satModeBtn.textContent = `${satMode}基準 ⇄`;
+            renderSaturationUI();
+        });
+
+        // --- 色情報のコピー機能（iFrame制限対応のexecCommandを使用） ---
+        copyBtn.addEventListener('click', () => {
+            const { r, g, b, hex, hsvSat, hslSat } = currentColorData;
+            const primarySat = satMode === 'HSV' ? `HSV ${hsvSat}%` : `HSL ${hslSat}%`;
+            const copyText = `RGB(${r}, ${g}, ${b}) / ${hex} / 彩度: ${primarySat}`;
+
+            const textArea = document.createElement('textarea');
+            textArea.value = copyText;
+            textArea.style.position = 'fixed';
+            textArea.style.left = '-9999px';
+            document.body.appendChild(textArea);
+            textArea.select();
+
+            try {
+                document.execCommand('copy');
+                copyBtnText.textContent = '完了!';
+                showToast(`コピーしました: ${copyText}`);
+                setTimeout(() => {
+                    copyBtnText.textContent = 'コピー';
+                }, 1500);
+            } catch (err) {
+                showToast('コピーに失敗しました', true);
+            }
+
+            document.body.removeChild(textArea);
+        });
+
+        // --- トースト通知表示 ---
+        let toastTimeout = null;
+        function showToast(message, isError = false) {
+            toast.textContent = message;
+            toast.className = `fixed top-16 left-1/2 -translate-x-1/2 text-white text-xs font-bold px-4 py-2 rounded-full shadow-xl transition-opacity duration-200 z-50 whitespace-nowrap ${
+                isError ? 'bg-rose-600' : 'bg-emerald-600'
+            }`;
+            toast.classList.remove('opacity-0');
+
+            clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(() => {
+                toast.classList.add('opacity-0');
+            }, 2200);
+        }
+    </script>
+</body>
+</html>
